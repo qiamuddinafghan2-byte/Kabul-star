@@ -456,8 +456,11 @@ export function CoursesTab() {
   );
 }
 
-/* ------------------------- CLASSES ------------------------- */
-export function ClassesTab() {
+/* CLASSES tab moved to ./classesTab.jsx */
+export { ClassesTab } from "./classesTab";
+export { BranchesTab, RoomsTab } from "./branches";
+
+function _LegacyClassesTab_UNUSED() {
   const [list, setList] = useState([]);
   const [courses, setCourses] = useState([]);
   const [teachers, setTeachers] = useState([]);

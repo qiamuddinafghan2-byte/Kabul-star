@@ -391,6 +391,10 @@ async def on_startup():
     await db.messages.create_index("status")
     await db.registrations.create_index("status")
     await academy_router.seed_courses()
+    await academy_router.seed_branches_rooms()
+    await db.branches.create_index("name")
+    await db.rooms.create_index("branch_id")
+    await db.classes.create_index("room_id")
 
     existing = await db.users.find_one({"email": ADMIN_EMAIL})
     if existing is None:

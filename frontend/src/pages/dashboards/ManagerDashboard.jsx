@@ -2,11 +2,12 @@ import DashboardLayout from "./DashboardShell";
 import { DASH } from "@/constants/testIds";
 import {
   LayoutDashboard, Users, GraduationCap, BookOpen, Layers,
-  Megaphone, MessageSquare, Settings, UserPlus,
+  Megaphone, MessageSquare, Settings, UserPlus, Building2, DoorOpen,
 } from "lucide-react";
 import {
   OverviewTab, RegistrationsTab, UsersTab, CoursesTab, ClassesTab,
   MessageApprovalsTab, AnnouncementsAdminTab, SettingsTab,
+  BranchesTab, RoomsTab,
 } from "./manager/tabs";
 
 export default function ManagerDashboard() {
@@ -16,6 +17,8 @@ export default function ManagerDashboard() {
     { key: "students", label: "Students", icon: GraduationCap, render: () => <UsersTab role="student" testidPrefix="student" /> },
     { key: "teachers", label: "Teachers", icon: Users, render: () => <UsersTab role="teacher" testidPrefix="teacher" /> },
     { key: "courses", label: "Courses", icon: BookOpen, render: () => <CoursesTab /> },
+    { key: "branches", label: "Branches", icon: Building2, render: () => <BranchesTab /> },
+    { key: "rooms", label: "Rooms", icon: DoorOpen, render: () => <RoomsTab /> },
     { key: "classes", label: "Classes", icon: Layers, render: () => <ClassesTab /> },
     { key: "messages", label: "Message approvals", icon: MessageSquare, render: () => <MessageApprovalsTab /> },
     { key: "announcements", label: "Announcements", icon: Megaphone, render: () => <AnnouncementsAdminTab /> },

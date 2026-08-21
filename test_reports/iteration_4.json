@@ -1,0 +1,57 @@
+{
+  "summary": "Phase-3 (Branches, Rooms, extended Classes + conflict detection) full-stack test. Added /app/backend/tests/test_phase3.py with 31 new pytest cases; full suite = 89/89 passing (58 prior regression + 31 new). Frontend: verified manager Branches/Rooms tabs CRUD, new class dialog (type toggle, branch/room, meeting URL, Sat-Thu day chips with no Friday, times, dates, status, student checkboxes), room-conflict 409 -> in-dialog 'Schedule conflicts detected' alert -> 'Save anyway' (class-save-force) persists. Verified student 'Join online class' button href = meeting_url and hidden for physical classes. Regression: homepage + 5 public pages, /register, all 3 logins, all manager/teacher/student tabs render clean.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/rooms, PATCH /api/rooms/{id}", "issue": "PATCH does not validate branch_id against existing branches (POST does return 400). A room can be re-pointed to a non-existent/archived branch via PATCH."},
+      {"endpoint": "DELETE /api/branches/{id}", "issue": "Archiving a branch does not archive/flag its rooms or classes; rooms keep pointing to an archived branch and still appear in GET /api/rooms (orphaned)."},
+      {"endpoint": "POST/PATCH /api/classes", "issue": "No server-side validation that days are within Sat-Thu, that end_time > start_time, that end_date >= start_date, or that class_type is one of physical|online. e.g. days=['Fri'] or start_time '18:00' with end_time '09:00' are accepted."},
+      {"endpoint": "POST/PATCH /api/classes", "issue": "room_id / branch_id are not validated as existing documents; an arbitrary room_id string is stored and used in conflict detection."},
+      {"endpoint": "POST /api/classes/check-conflicts", "issue": "Uses the full ClassIn model, so name+course_id are mandatory even though only schedule fields matter for a conflict pre-check."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "student/tabs.jsx (Today's lesson card)", "issue": "Physical class shows generic 'In-person' instead of the room name: the card reads cls.room (legacy free-text field, empty for classes created through the new dialog) and never resolves cls.room_id via GET /api/rooms. Verified: class with room_id=Room 1 renders 'In-person'.", "selector": "text=In-person", "priority": "MEDIUM"},
+      {"component": "student/tabs.jsx (Join online class)", "issue": "Fallback `const cls = todayClass || classes[0]` means when no class is scheduled for today (e.g. Friday, the academy's day off) the card and the 'Join online class' button still render for an unrelated class, implying a session today. Verified on Fri 2026-08-21 with days=Sat..Thu.", "selector": "[data-testid=\"student-join-online\"]", "priority": "MEDIUM"},
+      {"component": "manager/classesTab.jsx", "issue": "Status select, Meeting platform select, Start date and End date inputs, Meeting instructions textarea and the student checkboxes have no data-testid (only class-name/course/teacher/type/branch/room/day-*/start-time/end-time/save do).", "selector": "n/a", "priority": "LOW"},
+      {"component": "manager/branches.jsx (RoomsTab)", "issue": "Room capacity input has no data-testid; branch/room archive + edit icon buttons have no data-testid and no accessible label (icon-only).", "selector": "n/a", "priority": "LOW"},
+      {"component": "All dialogs (branch/room/class)", "issue": "React console warning on every dialog open: 'Missing `Description` or `aria-describedby={undefined}` for DialogContent' - a11y gap.", "selector": "[role=\"dialog\"]", "priority": "LOW"},
+      {"component": "manager/branches.jsx, classesTab.jsx", "issue": "Archive actions use window.confirm() instead of the shadcn AlertDialog used elsewhere; archive() has no try/catch so a failed DELETE fails silently with no toast.", "selector": "n/a", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Manager > Classes table", "issues": ["Classes with no schedule render a bare '— · —' in the Where column and '—' in Schedule, which looks like broken data rather than 'not set'."]},
+      {"screen": "Manager > Classes dialog student list", "issues": ["Student picker shows many duplicate leftover QA users ('TEST Approve Me', 'TEST_P2 Outsider') with identical names distinguished only by email - not a code bug but the DB needs a cleanup pass."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase3.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/test_phase2_fixes.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "student/tabs.jsx: resolve cls.room_id against GET /api/rooms so the physical class shows the actual room name (fall back to cls.room then 'In-person').",
+    "student/tabs.jsx: do not fall back to classes[0] for the 'Today' card / Join button - when no class matches today's weekday show 'No class scheduled today' (Friday is off).",
+    "routes_academy.py: validate class payloads (days subset of Sat-Thu, end_time > start_time, end_date >= start_date, class_type in physical|online, branch_id/room_id existence) with 400/422.",
+    "routes_academy.py: validate branch_id on PATCH /api/rooms and decide cascade behaviour when a branch is archived (archive its rooms or block while rooms exist).",
+    "Add data-testid to class status/dates/meeting-platform/student checkboxes, room capacity, and all edit/archive icon buttons; add DialogDescription to silence the aria-describedby warning.",
+    "Clean up leftover QA data in Mongo (classes CONFLICT_A, CONFLICT_B_forced, duplicate TEST Approve Me / TEST_P2 Outsider students) before demo."
+  ],
+  "critical_code_review_comments": [
+    "_detect_conflicts() does an unindexed full scan of db.classes filtered only by teacher_id/room_id $or; add a compound index on (archived, room_id, teacher_id) and on days before the class count grows.",
+    "_times_overlap/_dates_overlap rely on lexicographic string comparison, which is only safe because HH:MM and YYYY-MM-DD are zero-padded. There is no validation enforcing that format, so a payload like start_time '8:00' silently breaks conflict detection.",
+    "PATCH /api/classes merges `existing` (which still contains _id) into `merged` before conflict detection; harmless today but the merged dict is passed around with the raw Mongo doc - prefer projecting the doc.",
+    "manager/classesTab.jsx sends the whole `form` object on PATCH including EMPTY_FORM defaults spread over the existing class, so switching physical->online leaves stale branch_id/room_id on the document (and vice-versa stale meeting_url). Clear the irrelevant side before submit.",
+    "classesTab.jsx save() only guards name+course_id; days/start_time/end_time are unvalidated client-side, so a class with no days silently bypasses conflict detection server-side too."
+  ],
+  "updated_files": ["/app/backend/tests/test_phase3.py"],
+  "success_rate": {"backend": "100% (89/89 pytest)", "frontend": "100% of Phase-3 flows exercised passed; 6 non-blocking UI/a11y issues logged"},
+  "seed_data_creation": "Created and then deleted TEST_UI_Branch_303777, TEST_UI_Room_303777, TEST_UI_ConfA_303777, TEST_UI_ConfB_303777 plus all TEST_P3_* pytest fixtures (auto-cleaned). NOTE: existing class TEST_UI_Class_QA1 was left set to class_type=physical, branch_id=Kabul Star Main, room_id=Room 1, days=Sat..Thu, 17:00-18:00, meeting_url=https://zoom.us/j/QA-PHASE3 so both the online and physical student-card paths can be re-tested. Pre-existing CONFLICT_A / CONFLICT_B_forced classes (from the dev agent's manual curl) remain in Room 1 Sat 08:00-09:30.",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "manager qiamuddinafghan80@gmail.com/Admin@123, teacher teacher@kabulstar.edu/Teacher@123, student student@kabulstar.edu/Student@123 (all verified working; bcrypt $2b$12$, httpOnly+Secure+SameSite=None cookies set on login, 5-fail 15-min lockout implemented in server.py)",
+  "context_for_next_testing_agent": "Backend suite: /app/backend/tests/{backend_test.py,test_phase2_fixes.py,test_phase3.py} - run `cd /app/backend && python -m pytest tests/ -q` (89 tests, all green). test_phase3.py covers branches CRUD+RBAC, rooms CRUD+filter+400 on bad branch, extended class field round-trip, and 10 conflict-detection scenarios (room, teacher, force, non-overlapping day/time/date, archived exclusion, check-conflicts, PATCH 409 + force, self-conflict false positive). Room 1 on Sat 08:00-09:30 is polluted by CONFLICT_A/CONFLICT_B_forced, so any new test creating a class there must pass force=true (test_room_conflict already does). UI selectors verified: tab-branches/tab-rooms/tab-classes, branch-add/name/address/phone/email/save, room-add/name/branch/save, class-add/name/course/teacher/type-physical/type-online/branch/room/meeting-url/day-{Sat..Thu}/start-time/end-time/save/save-force, student-join-online. Not retested this round: message-approval flow, announcements CRUD, registration approval (covered in iterations 1-3); brute-force lockout was code-reviewed only, not re-triggered to avoid locking the manager account.",
+  "rca_of_the_issue": "No blocking defect found. The two student-dashboard findings share one root cause: student/tabs.jsx models the 'today' class from legacy Phase-1/2 fields (cls.room free text) and lacks a no-class-today branch, so it (a) cannot render a Phase-3 room_id-based room name and (b) falls back to classes[0] on the academy's off day (Friday), surfacing a Join button for a class not scheduled today. Reproduce: manager sets a student's class to physical with room_id=Room 1 and days Sat-Thu, log in as student on a Friday -> card shows 'In-person' and, if the class is online, the Join button appears."
+}

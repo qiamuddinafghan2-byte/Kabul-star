@@ -2,12 +2,15 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { useAuth } from "@/context/AuthContext";
-import { CalendarDays, ClipboardCheck, MessageSquare, Award, BookOpen, GraduationCap } from "lucide-react";
+import { CalendarDays, ClipboardCheck, MessageSquare, Award, BookOpen, GraduationCap, Video, MapPin } from "lucide-react";
+
+const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 const ATT_STYLES = {
   present: "bg-emerald-100 text-emerald-800",
@@ -19,6 +22,7 @@ const ATT_STYLES = {
 export function StudentOverviewTab() {
   const { user } = useAuth();
   const [classes, setClasses] = useState([]);
+  const [rooms, setRooms] = useState([]);
   const [att, setAtt] = useState([]);
   const [hw, setHw] = useState([]);
   const [exams, setExams] = useState([]);
@@ -26,17 +30,21 @@ export function StudentOverviewTab() {
   const [lessons, setLessons] = useState([]);
 
   useEffect(() => {
-    api.get("/classes").then((r) => setClasses(r.data));
-    api.get("/attendance").then((r) => setAtt(r.data));
-    api.get("/homework").then((r) => setHw(r.data));
-    api.get("/exams").then((r) => setExams(r.data));
-    api.get("/courses/public").then((r) => setCourses(r.data));
-    api.get("/lessons").then((r) => setLessons(r.data));
+    api.get("/classes").then((r) => setClasses(r.data)).catch(() => setClasses([]));
+    api.get("/rooms").then((r) => setRooms(r.data)).catch(() => setRooms([]));
+    api.get("/attendance").then((r) => setAtt(r.data)).catch(() => setAtt([]));
+    api.get("/homework").then((r) => setHw(r.data)).catch(() => setHw([]));
+    api.get("/exams").then((r) => setExams(r.data)).catch(() => setExams([]));
+    api.get("/courses/public").then((r) => setCourses(r.data)).catch(() => setCourses([]));
+    api.get("/lessons").then((r) => setLessons(r.data)).catch(() => setLessons([]));
   }, []);
 
   const today = new Date().toISOString().slice(0, 10);
+  const todayDay = DAY_NAMES[new Date().getDay()];
   const todaysLesson = lessons.find((l) => (l.date || "").slice(0, 10) === today);
-  const cls = classes[0];
+  // Only surface a class actually scheduled for today's weekday
+  const cls = classes.find((c) => (c.days || []).includes(todayDay));
+  const roomName = cls && rooms.find((r) => r.id === cls.room_id)?.name;
   const upcomingHw = hw.filter((h) => !h.due_date || h.due_date >= today).slice(0, 3);
   const upcomingExam = exams.find((e) => e.date >= today);
 
@@ -61,15 +69,37 @@ export function StudentOverviewTab() {
           <div className="flex items-center gap-2 text-xs uppercase tracking-widest text-[#B8860B]">
             <CalendarDays className="h-3.5 w-3.5" /> Today's lesson
           </div>
-          {todaysLesson ? (
-            <>
-              <div className="mt-2 font-serif font-black text-[#0F1E4F]">{todaysLesson.title}</div>
-              <p className="mt-2 text-sm text-slate-600 line-clamp-3">{todaysLesson.description}</p>
-            </>
+          {!cls ? (
+            <div className="mt-3 text-sm text-slate-500">No class scheduled today.</div>
           ) : (
-            <div className="mt-3 text-sm text-slate-500">No lesson posted for today yet.</div>
+            <>
+              {todaysLesson ? (
+                <>
+                  <div className="mt-2 font-serif font-black text-[#0F1E4F]">{todaysLesson.title}</div>
+                  <p className="mt-2 text-sm text-slate-600 line-clamp-3">{todaysLesson.description}</p>
+                </>
+              ) : (
+                <div className="mt-3 text-sm text-slate-500">Class today — teacher hasn't posted a lesson yet.</div>
+              )}
+              <div className="mt-3 text-xs text-slate-500 flex items-center gap-1.5">
+                {cls.class_type === "online"
+                  ? <><Video className="h-3 w-3" /> {cls.meeting_platform || "Online"}</>
+                  : <><MapPin className="h-3 w-3" /> {roomName || cls.room || "In-person"}</>}
+                <span>· {cls.name}{cls.start_time && ` · ${cls.start_time}-${cls.end_time}`}</span>
+              </div>
+              {cls.class_type === "online" && cls.meeting_url && (
+                <Button
+                  asChild
+                  data-testid="student-join-online"
+                  className="mt-4 w-full rounded-full bg-sky-600 hover:bg-sky-700 text-white"
+                >
+                  <a href={cls.meeting_url} target="_blank" rel="noopener noreferrer">
+                    <Video className="h-4 w-4 mr-1.5" /> Join online class
+                  </a>
+                </Button>
+              )}
+            </>
           )}
-          {cls && <div className="mt-3 text-xs text-slate-500">Class: {cls.name} · {cls.schedule || "TBD"}</div>}
         </Card>
 
         <Card className="p-6 rounded-2xl border-slate-200">

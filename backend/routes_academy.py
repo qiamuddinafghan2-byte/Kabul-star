@@ -81,8 +81,20 @@ class ClassIn(BaseModel):
     course_id: str
     teacher_id: Optional[str] = None
     student_ids: List[str] = []
+    class_type: str = "physical"  # physical | online
+    branch_id: Optional[str] = None
+    room_id: Optional[str] = None
     room: Optional[str] = None
     online: bool = False
+    days: List[str] = []
+    start_time: Optional[str] = None  # "HH:MM"
+    end_time: Optional[str] = None
+    start_date: Optional[str] = None  # "YYYY-MM-DD"
+    end_date: Optional[str] = None
+    status: str = "active"  # active | paused | completed
+    meeting_platform: Optional[str] = None
+    meeting_url: Optional[str] = None
+    meeting_instructions: Optional[str] = None
     schedule: Optional[str] = None
     branch: Optional[str] = None
     archived: bool = False
@@ -93,10 +105,52 @@ class ClassPatch(BaseModel):
     course_id: Optional[str] = None
     teacher_id: Optional[str] = None
     student_ids: Optional[List[str]] = None
+    class_type: Optional[str] = None
+    branch_id: Optional[str] = None
+    room_id: Optional[str] = None
     room: Optional[str] = None
     online: Optional[bool] = None
+    days: Optional[List[str]] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    status: Optional[str] = None
+    meeting_platform: Optional[str] = None
+    meeting_url: Optional[str] = None
+    meeting_instructions: Optional[str] = None
     schedule: Optional[str] = None
     branch: Optional[str] = None
+    archived: Optional[bool] = None
+
+
+class BranchIn(BaseModel):
+    name: str
+    address: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    archived: bool = False
+
+
+class BranchPatch(BaseModel):
+    name: Optional[str] = None
+    address: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    archived: Optional[bool] = None
+
+
+class RoomIn(BaseModel):
+    name: str
+    branch_id: str
+    capacity: Optional[int] = None
+    archived: bool = False
+
+
+class RoomPatch(BaseModel):
+    name: Optional[str] = None
+    branch_id: Optional[str] = None
+    capacity: Optional[int] = None
     archived: Optional[bool] = None
 
 
@@ -334,9 +388,138 @@ def build_router(db, get_current_user, require_role, hash_password):
             raise HTTPException(404, "User not found")
         return {"ok": True}
 
-    # -------- CLASSES --------
+    # -------- BRANCHES --------
+    @r.get("/branches")
+    async def list_branches(user=Depends(get_current_user)):
+        docs = await db.branches.find({"archived": {"$ne": True}}).sort("name", 1).to_list(200)
+        return [_s(d) for d in docs]
+
+    @r.post("/branches", status_code=201)
+    async def create_branch(body: BranchIn, user=Depends(require_role("manager"))):
+        doc = {"id": str(uuid.uuid4()), **body.model_dump(), "created_at": now_iso()}
+        await db.branches.insert_one(doc)
+        return _s(doc)
+
+    @r.patch("/branches/{bid}")
+    async def update_branch(bid: str, body: BranchPatch,
+                            user=Depends(require_role("manager"))):
+        upd = {k: v for k, v in body.model_dump(exclude_unset=True).items()}
+        if not upd:
+            raise HTTPException(400, "No fields")
+        res = await db.branches.update_one({"id": bid}, {"$set": upd})
+        if res.matched_count == 0:
+            raise HTTPException(404, "Branch not found")
+        return _s(await db.branches.find_one({"id": bid}))
+
+    @r.delete("/branches/{bid}")
+    async def archive_branch(bid: str, user=Depends(require_role("manager"))):
+        res = await db.branches.update_one({"id": bid}, {"$set": {"archived": True}})
+        if res.matched_count == 0:
+            raise HTTPException(404, "Branch not found")
+        return {"ok": True}
+
+    # -------- ROOMS --------
+    @r.get("/rooms")
+    async def list_rooms(branch_id: Optional[str] = None,
+                         user=Depends(get_current_user)):
+        q: dict[str, Any] = {"archived": {"$ne": True}}
+        if branch_id:
+            q["branch_id"] = branch_id
+        docs = await db.rooms.find(q).sort("name", 1).to_list(500)
+        return [_s(d) for d in docs]
+
+    @r.post("/rooms", status_code=201)
+    async def create_room(body: RoomIn, user=Depends(require_role("manager"))):
+        if not await db.branches.find_one({"id": body.branch_id, "archived": {"$ne": True}}):
+            raise HTTPException(400, "Branch not found")
+        doc = {"id": str(uuid.uuid4()), **body.model_dump(), "created_at": now_iso()}
+        await db.rooms.insert_one(doc)
+        return _s(doc)
+
+    @r.patch("/rooms/{rid}")
+    async def update_room(rid: str, body: RoomPatch,
+                          user=Depends(require_role("manager"))):
+        upd = {k: v for k, v in body.model_dump(exclude_unset=True).items()}
+        if not upd:
+            raise HTTPException(400, "No fields")
+        res = await db.rooms.update_one({"id": rid}, {"$set": upd})
+        if res.matched_count == 0:
+            raise HTTPException(404, "Room not found")
+        return _s(await db.rooms.find_one({"id": rid}))
+
+    @r.delete("/rooms/{rid}")
+    async def archive_room(rid: str, user=Depends(require_role("manager"))):
+        res = await db.rooms.update_one({"id": rid}, {"$set": {"archived": True}})
+        if res.matched_count == 0:
+            raise HTTPException(404, "Room not found")
+        return {"ok": True}
+
+    # -------- CONFLICT DETECTION --------
+    def _times_overlap(a_s: str, a_e: str, b_s: str, b_e: str) -> bool:
+        return a_s < b_e and b_s < a_e
+
+    def _dates_overlap(a_s: Optional[str], a_e: Optional[str],
+                       b_s: Optional[str], b_e: Optional[str]) -> bool:
+        if a_e and b_s and a_e < b_s:
+            return False
+        if b_e and a_s and b_e < a_s:
+            return False
+        return True
+
+    async def _detect_conflicts(payload: dict, exclude_id: Optional[str] = None) -> list[dict]:
+        days = set(payload.get("days") or [])
+        st = payload.get("start_time")
+        et = payload.get("end_time")
+        teacher_id = payload.get("teacher_id")
+        room_id = payload.get("room_id")
+        if not (st and et and days and (teacher_id or room_id)):
+            return []
+        q: dict[str, Any] = {"archived": {"$ne": True}}
+        if exclude_id:
+            q["id"] = {"$ne": exclude_id}
+        ors: list[dict] = []
+        if teacher_id:
+            ors.append({"teacher_id": teacher_id})
+        if room_id:
+            ors.append({"room_id": room_id})
+        q["$or"] = ors
+        results = []
+        async for c in db.classes.find(q):
+            c_days = set(c.get("days") or [])
+            if not (days & c_days):
+                continue
+            if not (c.get("start_time") and c.get("end_time")):
+                continue
+            if not _times_overlap(st, et, c["start_time"], c["end_time"]):
+                continue
+            if not _dates_overlap(payload.get("start_date"), payload.get("end_date"),
+                                  c.get("start_date"), c.get("end_date")):
+                continue
+            reasons = []
+            if teacher_id and c.get("teacher_id") == teacher_id:
+                reasons.append("teacher")
+            if room_id and c.get("room_id") == room_id:
+                reasons.append("room")
+            results.append({
+                "class_id": c["id"],
+                "name": c.get("name"),
+                "conflicts": reasons,
+                "days": sorted(list(days & c_days)),
+                "start_time": c["start_time"],
+                "end_time": c["end_time"],
+            })
+        return results
+
+    @r.post("/classes/check-conflicts")
+    async def check_conflicts(body: ClassIn, user=Depends(require_role("manager"))):
+        return {"conflicts": await _detect_conflicts(body.model_dump())}
+
     @r.post("/classes", status_code=201)
-    async def create_class(body: ClassIn, user=Depends(require_role("manager"))):
+    async def create_class(body: ClassIn, force: bool = False,
+                           user=Depends(require_role("manager"))):
+        conflicts = await _detect_conflicts(body.model_dump())
+        if conflicts and not force:
+            raise HTTPException(status_code=409, detail={"conflicts": conflicts})
         doc = {"id": str(uuid.uuid4()), **body.model_dump(), "created_at": now_iso()}
         await db.classes.insert_one(doc)
         return _s(doc)
@@ -354,14 +537,19 @@ def build_router(db, get_current_user, require_role, hash_password):
         return [_s(d) for d in docs]
 
     @r.patch("/classes/{cid}")
-    async def update_class(cid: str, body: ClassPatch,
+    async def update_class(cid: str, body: ClassPatch, force: bool = False,
                            user=Depends(require_role("manager"))):
         upd = {k: v for k, v in body.model_dump(exclude_unset=True).items()}
         if not upd:
             raise HTTPException(400, "No fields")
-        res = await db.classes.update_one({"id": cid}, {"$set": upd})
-        if res.matched_count == 0:
+        existing = await db.classes.find_one({"id": cid})
+        if not existing:
             raise HTTPException(404, "Not found")
+        merged = {**existing, **upd}
+        conflicts = await _detect_conflicts(merged, exclude_id=cid)
+        if conflicts and not force:
+            raise HTTPException(status_code=409, detail={"conflicts": conflicts})
+        await db.classes.update_one({"id": cid}, {"$set": upd})
         return _s(await db.classes.find_one({"id": cid}))
 
     @r.delete("/classes/{cid}")
@@ -592,6 +780,24 @@ def build_router(db, get_current_user, require_role, hash_password):
         if res.matched_count == 0:
             raise HTTPException(404, "Not found or not pending")
         return {"ok": True}
+
+    # -------- SEED default branch + rooms --------
+    async def seed_branches_rooms():
+        if await db.branches.count_documents({}) > 0:
+            return
+        bid = str(uuid.uuid4())
+        await db.branches.insert_one({
+            "id": bid, "name": "Kabul Star Main", "address": "Kabul, Afghanistan",
+            "phone": "+93 700 000 000", "email": "main@kabulstar.edu",
+            "archived": False, "created_at": now_iso(),
+        })
+        for i in range(1, 5):
+            await db.rooms.insert_one({
+                "id": str(uuid.uuid4()), "name": f"Room {i}", "branch_id": bid,
+                "capacity": 25, "archived": False, "created_at": now_iso(),
+            })
+
+    r.seed_branches_rooms = seed_branches_rooms  # type: ignore[attr-defined]
 
     # -------- SEED default courses --------
     async def seed_courses():
