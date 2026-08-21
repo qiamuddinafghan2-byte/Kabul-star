@@ -1,0 +1,60 @@
+{
+  "summary": "Phase-2 fix verification for Kabul Star Academy. Backend: re-ran the 35-test suite and added a new 23-test suite (/app/backend/tests/test_phase2_fixes.py) for the 5 reported fixes -> 56/58 pass. CONFIRMED FIXED: teacher-scoped GET /api/users?role=student (own non-archived classes only, outsider student correctly hidden, role=teacher -> 403, student/anon guards intact), /auth/me now returns course_id/current_level/progress/phone/branch/active for all 3 roles and reflects manager PATCH, GET /api/classes hides archived classes for manager+teacher+student, DELETE /api/classes/{unknown} -> 404, POST /api/attendance rejects empty entries (400) and malformed/invalid-status entries (422) while the happy path still writes and the student sees the record. Frontend: teacher Attendance roster + att-{id}-present buttons render and save, 'My Students' shows Demo Student/TEST_UI_Class_QA1, Compose dialog lists recipients, and full teacher->manager approval->student inbox E2E works through the UI. All manager (9), teacher (8) and student (7) tabs render with no console errors. NEW BUGS FOUND: (1) student 'My Course' is still 'Not assigned' immediately after login (only correct after a page reload) because AuthContext.login() stores the partial login payload and never calls refreshMe(); (2) content of archived classes (homework/lessons/exams/attendance) still leaks to students even though the class itself is hidden - this breaks 2 backend tests.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/homework, /api/lessons, /api/exams, /api/attendance", "issue": "Archived-class filter was only added to list_classes. All content endpoints resolve the student's classes with db.classes.find({'student_ids': uid}) (and teacher endpoints with {'teacher_id': uid}) WITHOUT {'archived': {'$ne': True}}, so a soft-deleted class disappears from /api/classes but its homework/lessons/exams/attendance are still returned. Reproduced by tests/test_phase2_fixes.py::test_16 (all 4 endpoints leak) and this also now breaks tests/backend_test.py::TestAcademyFlow::test_06_homework."},
+      {"endpoint": "POST /api/messages", "issue": "Still not fixed from iteration 2: recipient_ids is not validated against the selected class roster and an empty list is accepted."},
+      {"endpoint": "POST /api/attendance", "issue": "Attendance can still be marked on an archived (soft-deleted) class - _teacher_owns_class() ignores the archived flag. Returns 201."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "AuthContext.login / StudentOverviewTab / StudentCourseTab", "issue": "Student 'My Course' shows 'Not assigned' and progress 0% right after login; after F5 it correctly shows 'Book 1', 20% and the 'Current' badge. Root cause: AuthContext.login() does setUser({id,email,name,role}) from the /auth/login response (which does NOT include course_id) and never awaits refreshMe(). Fix: call refreshMe() after a successful login (or return the same field set from /auth/login).", "selector": "[data-testid=\"student-my-course\"], [data-testid=\"student-progress-pct\"]", "priority": "HIGH"},
+      {"component": "StudentOverviewTab", "issue": "Overall progress is derived from course order ((order+1)/courses.length = 20%) and ignores the user.progress value the manager stores (40.0 returned by /auth/me), so the manager's progress edits never show. Pick one source of truth.", "selector": "[data-testid=\"student-progress-pct\"]", "priority": "MEDIUM"},
+      {"component": "ManagerMessagesTab", "issue": "Approval toast shows the raw status string 'approved' (lowercase, no sentence) instead of a user-facing message like 'Message approved and sent to students'.", "selector": "[data-testid^=\"msg-approve-\"]", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "All pages", "issues": ["document.title is STILL the boilerplate 'Emergent | Fullstack App' (reported in iteration 2, not fixed); no per-route titles/meta description."]},
+      {"screen": "Public pages (console)", "issues": ["Unauthenticated page loads still fire GET /api/auth/me and log 4x 'Failed to load resource: 401' in the console (reported in iteration 2, not fixed)."]},
+      {"screen": "Teacher Attendance / Homework / Exams", "issues": ["Date fields use the native browser date picker (<Input type=\"date\">) instead of the shadcn Calendar/Popover component used elsewhere in the design system."]},
+      {"screen": "Manager/Teacher Overview", "issues": ["Stat cards still have no loading skeleton and silently fall back to zeros on API error (reported in iteration 2)."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase2_fixes.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "HIGH: in AuthContext.login(), await refreshMe() (or include course_id/current_level/progress/phone/branch in the /auth/login response) so the student dashboard shows the assigned course without a manual page reload.",
+    "Apply the archived filter to the class-resolution queries in list_homework, list_exams, list_lessons and get_attendance (student and teacher branches) - add {'archived': {'$ne': True}} exactly like list_classes; then tests/backend_test.py::test_06_homework and tests/test_phase2_fixes.py::test_16 will pass.",
+    "Decide the single source for student progress (stored user.progress vs course-order calculation) and use it in StudentOverviewTab.",
+    "Validate POST /api/messages recipient_ids against the class roster and reject an empty list.",
+    "Reject attendance/homework/exam/lesson writes against archived classes in _teacher_owns_class().",
+    "Set a real document.title / meta description and skip the /api/auth/me probe on public pages when no session exists.",
+    "Replace native <Input type=\"date\"> with the shadcn Calendar component in teacher attendance/homework/exam forms.",
+    "Purge the leftover TEST_* messages/homework/exams from the demo student account before demoing (inbox currently shows ~10 'TEST TMsg/MMsg' items)."
+  ],
+  "critical_code_review_comments": [
+    "routes_academy.py: the archived flag is now honoured only in list_classes; the same {'student_ids': uid} / {'teacher_id': uid} class lookup is duplicated in 4 other handlers (list_homework, list_exams, list_lessons, get_attendance) without it. Extract a single helper _visible_class_ids(user) and reuse it - the duplication is exactly why the fix was partial.",
+    "AuthContext.login() constructs a partial user object by hand; any field added to /auth/me will keep silently missing until the next reload. Call refreshMe() and let one endpoint define the shape.",
+    "_teacher_owns_class() does not check archived, so writes are still accepted for soft-deleted classes.",
+    "frontend/manager/tabs.jsx (766 lines) and teacher/tabs.jsx (~505 lines) still exceed the 700-line/one-concern guideline - split per tab.",
+    "student/tabs.jsx still had zero data-testid attributes; I added the minimum needed for assertions (see updated_files) - the rest of the student cards/rows still need them."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase2_fixes.py",
+    "/app/frontend/src/pages/dashboards/student/tabs.jsx",
+    "/app/frontend/src/pages/dashboards/teacher/tabs.jsx"
+  ],
+  "success_rate": {"backend": "96.5% (56/58 pytest)", "frontend": "~92% (all teacher/manager flows + tabs pass; student My Course wrong until reload)"},
+  "seed_data_creation": "Created and archived TEST_P2_* classes, one throwaway student 'TEST_P2 Outsider' (deactivated in teardown, no DELETE /users endpoint exists), plus one approved message 'TEST_P2 QA subject' in the demo student's inbox. NOTE: test_08 set Demo Student course_id=Book 1, current_level='Book 1', progress=40.0 - left in place intentionally so the My Course fix can be re-verified.",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "/app/memory/test_credentials.md present and all 3 accounts work. /app/auth_testing.md referenced in the request still does not exist.",
+  "context_for_next_testing_agent": "Backend: `cd /app/backend && python -m pytest tests/ -q`. 2 known failures, both the SAME root cause (archived-class content leak): backend_test.py::TestAcademyFlow::test_06_homework and test_phase2_fixes.py::TestPhase2Fixes::test_16_archived_class_content_leaks_to_student. Everything else is green. Frontend testids I added: student-my-course, student-progress-pct, course-row-{id}, course-duration-{id}, course-state-{id}, teacher-student-{id}, msg-class, msg-recipient-{id}, lesson-class. To retest the My Course bug: log in as student@kabulstar.edu and read [data-testid=\"student-my-course\"] WITHOUT reloading - it must read 'Book 1' (a reload already works today). Class TEST_UI_Class_QA1 (Demo Teacher + Demo Student) is still active - reuse it. Manager tab keys: overview/registrations/students/teachers/courses/classes/messages/announcements/settings (message approvals = tab-messages, there is no tab-approvals).",
+  "rca_of_the_issue": "Two remaining defects. (1) Student My Course: the /auth/me fix is correct server-side (curl returns course_id d6f2fb30..., current_level 'Book 1', progress 40.0), but AuthContext.login() sets user from the /auth/login body which only has id/email/name/role, so on the login->dashboard transition user.course_id is undefined and courses.find(c => c.id === user.course_id) misses; a hard reload runs refreshMe() and everything (course name, 20% progress, 'Completed/Current/Upcoming' badges) renders correctly - proving the frontend logic and the '1 month' singular fix are fine. (2) Archived classes: the {'archived': {'$ne': True}} filter was added to list_classes only. list_homework/list_exams/list_lessons/get_attendance rebuild the caller's class list without that filter, so archived-class content keeps flowing to students and teachers; repro = create class -> add homework/lesson/exam/attendance -> DELETE /api/classes/{id} -> class gone from /api/classes but all 4 content endpoints still return its rows."
+}

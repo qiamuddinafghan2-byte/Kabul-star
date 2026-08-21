@@ -9,6 +9,7 @@ import Programs from "@/pages/Programs";
 import Announcements from "@/pages/Announcements";
 import Contact from "@/pages/Contact";
 import Login from "@/pages/Login";
+import Register from "@/pages/Register";
 import ManagerDashboard from "@/pages/dashboards/ManagerDashboard";
 import TeacherDashboard from "@/pages/dashboards/TeacherDashboard";
 import StudentDashboard from "@/pages/dashboards/StudentDashboard";
@@ -31,6 +32,7 @@ function App() {
 
             <Route path="/login" element={<Navigate to="/login/student" replace />} />
             <Route path="/login/:role" element={<Login />} />
+            <Route path="/register" element={<Register />} />
 
             <Route
               path="/dashboard/manager"

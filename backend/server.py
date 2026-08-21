@@ -224,7 +224,18 @@ async def logout(response: Response, user: dict = Depends(get_current_user)):
 
 @api.get("/auth/me")
 async def me(user: dict = Depends(get_current_user)):
-    return {"id": user["_id"], "email": user["email"], "name": user.get("name", ""), "role": user["role"]}
+    return {
+        "id": user["_id"],
+        "email": user["email"],
+        "name": user.get("name", ""),
+        "role": user["role"],
+        "course_id": user.get("course_id"),
+        "current_level": user.get("current_level"),
+        "progress": user.get("progress"),
+        "phone": user.get("phone"),
+        "branch": user.get("branch"),
+        "active": user.get("active", True),
+    }
 
 @api.post("/auth/refresh")
 async def refresh_token(request: Request, response: Response):
@@ -351,7 +362,10 @@ async def dashboard_student(user: dict = Depends(require_role("student"))):
     return {"role": "student", "modules": ["My Classes", "Schedule", "Homework", "Attendance", "Announcements"]}
 
 # ---------- App wiring ----------
+from routes_academy import build_router as build_academy_router
+academy_router = build_academy_router(db, get_current_user, require_role, hash_password)
 app.include_router(api)
+app.include_router(academy_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -368,6 +382,15 @@ async def on_startup():
     await db.announcements.create_index([("published_at", -1)])
     await db.login_attempts.create_index("identifier")
     await db.settings.create_index("key", unique=True)
+    await db.courses.create_index("order")
+    await db.classes.create_index("teacher_id")
+    await db.attendance.create_index([("class_id", 1), ("date", -1)])
+    await db.homework.create_index("class_id")
+    await db.exams.create_index("class_id")
+    await db.lessons.create_index("class_id")
+    await db.messages.create_index("status")
+    await db.registrations.create_index("status")
+    await academy_router.seed_courses()
 
     existing = await db.users.find_one({"email": ADMIN_EMAIL})
     if existing is None:

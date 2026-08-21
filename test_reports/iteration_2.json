@@ -1,0 +1,69 @@
+{
+  "summary": "Phase-2 full-stack testing of Kabul Star Academy. Backend: created pytest suite (35 tests) covering courses CRUD/archive, public registration + approve/reject, user create/patch/suspend, classes + per-role visibility, attendance, lessons, homework, exams, message approval workflow, and all 401/403 role guards, plus auth/security playbook checks (bcrypt $2b$, httpOnly cookies, CORS+credentials, 5-fail lockout->429, seed_admin update). 35/35 pass. Frontend: verified homepage + Register nav link, public registration form -> pending -> manager approve (student account + credentials toast), manager all 9 tabs, course add, class create with teacher+students, message approval via UI, settings save, logout; teacher all 8 tabs + homework/exam/message create; student all 7 tabs with real data (lesson, attendance %, homework, exams, messages) and role-based redirect /dashboard/manager -> /dashboard/student. Found 2 HIGH functional bugs caused by missing backend read-access for teacher/student roles, plus archived-class leakage.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "GET /api/users?role=student", "issue": "Manager-only (403 for teacher). Teacher UI calls this for the attendance roster, 'My Students' tab and message recipients, so teachers can NEVER mark attendance or address a message to a student. Needs a teacher-scoped endpoint (e.g. GET /api/classes/{id}/students, or allow teacher access filtered to students in their own classes).", "priority": "CRITICAL"},
+      {"endpoint": "GET /api/auth/me", "issue": "Returns only id/email/name/role. Student dashboard reads user.course_id (StudentOverviewTab / StudentCourseTab), so 'My Course' is always 'Not assigned', overall progress always 0% and the whole course pathway shows every course as 'Upcoming' even after the manager assigns a course. Add course_id/current_level/progress/phone/branch to /auth/me (or add GET /api/users/me).", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "GET /api/classes", "issue": "Does not filter archived classes. DELETE /api/classes/{id} only sets archived=true, but list_classes has no {'archived': {'$ne': True}} filter, so archived classes still appear for manager/teacher/student (student 'Today's lesson' rendered a lesson from an archived class). /courses/public filters correctly - make classes consistent."},
+      {"endpoint": "DELETE /api/classes/{cid}", "issue": "Returns 200 {ok:true} even when the class id does not exist (no matched_count check), unlike DELETE /api/courses/{cid} which 404s."},
+      {"endpoint": "POST /api/attendance", "issue": "Accepts entries=[] and returns 201 {'ok':true,'count':0}, which makes the UI show 'Attendance saved' when nothing was recorded. Reject empty entries with 400 (or at least surface count in the UI)."},
+      {"endpoint": "POST /api/attendance", "issue": "entries is List[dict] - no Pydantic model, so a malformed entry missing 'student_id'/'status' raises a raw KeyError (500) instead of 422. Define an AttendanceEntry model."},
+      {"endpoint": "POST /api/messages", "issue": "recipient_ids is not validated against the selected class roster and an empty list is accepted, so a teacher can create/approve a message no one will ever receive."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "TeacherAttendanceTab", "issue": "After selecting a class that has students, the panel still shows 'Select a class with students to mark attendance.' and 0 student rows render, yet clicking 'Save attendance' shows a false 'Attendance saved' toast. Root cause: api.get('/users?role=student') 403s for teachers and the error is swallowed (.catch(() => {})), so roster = [].", "selector": "[data-testid=\"att-class\"] / [data-testid^=\"att-\"][data-testid$=\"-present\"] / [data-testid=\"att-save\"]", "priority": "CRITICAL"},
+      {"component": "TeacherStudentsTab", "issue": "'My Students' tab is permanently empty ('No students in your classes yet.') for the same 403 reason, even when the manager assigned students.", "selector": "[data-testid=\"tab-students\"]", "priority": "HIGH"},
+      {"component": "TeacherMessagesTab", "issue": "Compose dialog recipient list always shows 'Select a class to see students.' even after picking a class; api.get('/users?role=student') on line ~354 has no .catch so the 403 surfaces as an unhandled promise rejection (window pageerror: 'Request failed with status code 403'). Messages therefore get created with recipient_ids=[] and never reach any student.", "selector": "[data-testid=\"msg-compose\"], [data-testid=\"msg-send\"]", "priority": "HIGH"},
+      {"component": "StudentOverviewTab / StudentCourseTab", "issue": "'My Course' shows 'Not assigned' and pathway marks all 15 courses 'Upcoming' / progress 0% even after manager PATCH sets course_id. Depends on user.course_id which /auth/me never returns.", "selector": "[data-testid=\"tab-course\"]", "priority": "HIGH"},
+      {"component": "TeacherLessonTab", "issue": "The class <Select> in 'Add today's lesson' has no data-testid (only lesson-title / lesson-save exist), and submitting without a class selected produced no visible validation error. Add data-testid=\"lesson-class\" and inline validation."},
+      {"component": "student/tabs.jsx", "issue": "Entire student dashboard file contains ZERO data-testid attributes (no testids on stat cards, attendance rows, homework/exam/message cards, profile fields), so student-side assertions can only be done via raw text. Also manager OverviewTab stat cards have no testids.", "selector": "n/a", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [
+      {"flow": "Teacher marks attendance -> student attendance history", "issue": "Cannot be completed through the UI at all (roster empty). Verified working only via direct API calls, which confirms the break is the teacher's missing student-read permission, not the attendance endpoint.", "affected_selectors": ["[data-testid=\"att-class\"]", "[data-testid=\"att-save\"]"]},
+      {"flow": "Teacher message -> manager approval -> student inbox", "issue": "Manager approve/reject buttons and the student inbox work correctly, but the teacher UI cannot attach recipients, so the end-to-end flow only works when recipient_ids are injected via API.", "affected_selectors": ["[data-testid=\"msg-send\"]", "[data-testid^=\"msg-approve-\"]"]}
+    ],
+    "design_issues": [
+      {"screen": "All pages", "issues": ["document.title is still the boilerplate 'Emergent | Fullstack App' instead of 'Kabul Star English Language Academy'; no per-route titles/meta description."]},
+      {"screen": "Public pages (console)", "issues": ["Unauthenticated visitors trigger a GET /api/auth/me that returns 401 on every page load, logging console errors. Skip the probe when no session cookie/flag exists."]},
+      {"screen": "Manager Overview / Teacher Overview", "issues": ["Stat cards render with no loading skeleton and silently fall back to all zeros on any API error (.catch sets every stat to 0), hiding real failures from the manager."]},
+      {"screen": "Student My Course", "issues": ["Course pathway duration reads '1 months' (should be '1 month'); every row shows the same 'Upcoming' badge so there is no visual current-level marker."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "CRITICAL: give teachers a way to read the students of their own classes (new GET /api/classes/{id}/students or widen /api/users for teachers scoped to their class rosters) and point TeacherAttendanceTab / TeacherStudentsTab / TeacherMessagesTab at it. Attendance marking is completely unusable today.",
+    "HIGH: include course_id (and current_level/progress/branch/phone) in GET /api/auth/me so the student 'My Course', progress bar and course pathway work.",
+    "Filter archived classes out of GET /api/classes (all three role branches) and make DELETE /api/classes 404 on unknown id.",
+    "Reject POST /api/attendance with empty entries (400) and model entries with a Pydantic AttendanceEntry so malformed payloads return 422 instead of 500.",
+    "Add .catch/error-state handling to every api.get in teacher/tabs.jsx (line ~354 causes an unhandled rejection) so permission failures surface as a toast instead of an empty panel with a false success.",
+    "Add data-testid attributes across student/tabs.jsx, plus lesson-class select and manager overview stat cards.",
+    "Set a real document title / meta description and stop probing /api/auth/me when there is no session."
+  ],
+  "critical_code_review_comments": [
+    "routes_academy.py: role-based read permissions are inconsistent - teachers can list their classes but cannot resolve the student ids inside them, which makes attendance/messages unusable. The permission model needs a class-scoped student read.",
+    "routes_academy.py list_classes(): archived flag is written by DELETE but never used by any read query - dead soft-delete.",
+    "routes_academy.py AttendanceMark.entries: List[dict] bypasses validation; e['student_id'] / e['status'] will KeyError -> 500.",
+    "server.py /auth/me returns a hand-picked subset of user fields that the student dashboard depends on; either return the sanitized user document or add a dedicated profile endpoint.",
+    "frontend/manager/tabs.jsx is 766 lines and teacher/tabs.jsx 505 lines - split per-tab into separate files (>700-line guideline).",
+    "Several api.get(...) calls have no .catch and no error UI state (teacher/tabs.jsx:354, student/tabs.jsx:29-34), so 4xx/5xx render as silently empty panels."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/conftest.py"
+  ],
+  "success_rate": {"backend": "100% (35/35 automated tests)", "frontend": "~80% (manager + student + public flows pass; teacher attendance/students/message-recipients broken)"},
+  "seed_data_creation": "All TEST_* data created during testing was cleaned from MongoDB. Left intentionally for the next iteration: class 'TEST_UI_Class_QA1' (course Pre-Beginner, teacher = Demo Teacher, student = Demo Student) with 1 attendance record, 1 lesson, 3 homework (incl. 'TEST QA Future HW' due 2026-09-30), 3 exams (incl. 'TEST QA Future Exam' 2026-09-25) and 4 approved/sent messages to Demo Student. Courses back to the 15 seeded rows; 1 pre-existing pending registration ('Sample Applicant') remains.",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "/app/memory/test_credentials.md is present and all three accounts work: manager qiamuddinafghan80@gmail.com/Admin@123, teacher teacher@kabulstar.edu/Teacher@123, student student@kabulstar.edu/Student@123. NOTE: /app/auth_testing.md referenced in the request does not exist.",
+  "context_for_next_testing_agent": "Backend suite lives at /app/backend/tests/backend_test.py + conftest.py (35 tests, all green; run `cd /app/backend && python -m pytest tests/ -v`). pytest.ini forces -n 2 --dist loadscope, so the sequential E2E flow is intentionally kept inside the single class TestAcademyFlow. Class TEST_UI_Class_QA1 links Demo Teacher + Demo Student with lesson/homework/exam/attendance/message data already in place - reuse it. Re-verify after fixes: (1) teacher Attendance tab renders the roster and att-{id}-present buttons appear, (2) teacher Compose dialog lists recipients, (3) teacher 'My Students' tab is non-empty, (4) student 'My Course' shows the assigned course + non-zero progress, (5) archived classes disappear from GET /api/classes. Note the preview edge proxy answers OPTIONS preflight itself and rewrites CORS headers, so app-level CORS must be asserted against http://localhost:8001.",
+  "rca_of_the_issue": "Both HIGH/CRITICAL bugs are missing role-scoped read APIs rather than UI defects. (1) Teacher attendance: teacher/tabs.jsx builds its roster with `students.filter(s => cls.student_ids.includes(s.id))` after `api.get('/users?role=student')`, but routes_academy.list_users is guarded by require_role('manager'), so the teacher gets 403; the .catch(() => {}) swallows it and roster stays empty -> the 'Select a class with students' placeholder renders, save posts entries=[] and the backend happily returns 201 count:0 producing a false 'Attendance saved' toast. Repro: log in as teacher@kabulstar.edu -> Attendance -> select TEST_UI_Class_QA1 -> no student rows. (2) Student My Course: StudentOverviewTab/StudentCourseTab match `courses.find(c => c.id === user.course_id)` where user comes from GET /api/auth/me, which returns only id/email/name/role - course_id is always undefined. Repro: as manager PATCH /api/users/{studentId} {course_id: <Book 3 id>} (returns 200, persisted), then log in as that student -> 'My Course: Not assigned', progress 0%. Mitigation: expose class-scoped students to teachers and return the student's course_id from /auth/me."
+}

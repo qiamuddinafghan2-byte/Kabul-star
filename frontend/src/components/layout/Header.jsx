@@ -17,6 +17,7 @@ const NAV_LINKS = [
   { to: "/about", label: "About", testid: NAV.about },
   { to: "/programs", label: "Programs", testid: NAV.programs },
   { to: "/announcements", label: "Announcements", testid: NAV.announcements },
+  { to: "/register", label: "Register", testid: "nav-register" },
   { to: "/contact", label: "Contact", testid: NAV.contact },
 ];
 

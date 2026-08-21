@@ -75,8 +75,8 @@ export default function Home() {
                 data-testid={HOME.heroCta}
                 className="rounded-full h-12 px-6 bg-[#F5D06B] text-[#0B1638] hover:bg-[#FBBF24] font-semibold shadow-lg"
               >
-                <Link to="/programs">
-                  Explore programs
+                <Link to="/register">
+                  Apply for admission
                   <ArrowRight className="h-4 w-4 ml-1.5" />
                 </Link>
               </Button>

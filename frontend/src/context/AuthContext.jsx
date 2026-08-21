@@ -25,12 +25,13 @@ export function AuthProvider({ children }) {
   const login = useCallback(async ({ email, password, role }) => {
     try {
       const { data } = await api.post("/auth/login", { email, password, role });
-      setUser({ id: data.id, email: data.email, name: data.name, role: data.role });
+      // Pull the full user profile (includes course_id, current_level, progress, etc.)
+      await refreshMe();
       return { ok: true, user: data };
     } catch (e) {
       return { ok: false, error: formatApiError(e.response?.data?.detail, "Login failed") };
     }
-  }, []);
+  }, [refreshMe]);
 
   const logout = useCallback(async () => {
     try {
