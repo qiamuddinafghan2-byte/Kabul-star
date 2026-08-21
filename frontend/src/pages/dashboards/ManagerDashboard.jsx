@@ -3,11 +3,12 @@ import { DASH } from "@/constants/testIds";
 import {
   LayoutDashboard, Users, GraduationCap, BookOpen, Layers,
   Megaphone, MessageSquare, Settings, UserPlus, Building2, DoorOpen,
+  ClipboardCheck, DollarSign, Award,
 } from "lucide-react";
 import {
   OverviewTab, RegistrationsTab, UsersTab, CoursesTab, ClassesTab,
   MessageApprovalsTab, AnnouncementsAdminTab, SettingsTab,
-  BranchesTab, RoomsTab,
+  BranchesTab, RoomsTab, ManagerAttendanceTab, FeesTab, CertificatesTab,
 } from "./manager/tabs";
 
 export default function ManagerDashboard() {
@@ -20,6 +21,9 @@ export default function ManagerDashboard() {
     { key: "branches", label: "Branches", icon: Building2, render: () => <BranchesTab /> },
     { key: "rooms", label: "Rooms", icon: DoorOpen, render: () => <RoomsTab /> },
     { key: "classes", label: "Classes", icon: Layers, render: () => <ClassesTab /> },
+    { key: "attendance", label: "Attendance", icon: ClipboardCheck, render: () => <ManagerAttendanceTab /> },
+    { key: "fees", label: "Fees", icon: DollarSign, render: () => <FeesTab /> },
+    { key: "certificates", label: "Certificates", icon: Award, render: () => <CertificatesTab /> },
     { key: "messages", label: "Message approvals", icon: MessageSquare, render: () => <MessageApprovalsTab /> },
     { key: "announcements", label: "Announcements", icon: Megaphone, render: () => <AnnouncementsAdminTab /> },
     { key: "settings", label: "Settings", icon: Settings, render: () => <SettingsTab /> },

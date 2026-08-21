@@ -202,6 +202,55 @@ class MessageIn(BaseModel):
     body: str
 
 
+class FeeIn(BaseModel):
+    student_id: str
+    course_id: Optional[str] = None
+    class_id: Optional[str] = None
+    category: str  # registration | monthly_tuition | book | exam | certificate | other
+    amount: float
+    currency: str = "AFN"
+    discount: float = 0
+    scholarship_amount: float = 0
+    due_date: Optional[str] = None
+    period: Optional[str] = None  # e.g. "2026-08"
+    notes: Optional[str] = None
+
+
+class FeePatch(BaseModel):
+    category: Optional[str] = None
+    amount: Optional[float] = None
+    discount: Optional[float] = None
+    scholarship_amount: Optional[float] = None
+    due_date: Optional[str] = None
+    period: Optional[str] = None
+    notes: Optional[str] = None
+    late_fee: Optional[float] = None
+
+
+class PaymentIn(BaseModel):
+    amount: float
+    payment_method: Optional[str] = "cash"
+    receipt_number: Optional[str] = None
+    paid_date: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class CertificateIn(BaseModel):
+    student_id: str
+    course_id: str
+    completion_date: str
+    certificate_number: str
+    notes: Optional[str] = None
+    issued_date: Optional[str] = None
+
+
+class CertificatePatch(BaseModel):
+    completion_date: Optional[str] = None
+    certificate_number: Optional[str] = None
+    notes: Optional[str] = None
+    issued_date: Optional[str] = None
+
+
 def build_router(db, get_current_user, require_role, hash_password):
     r = APIRouter(prefix="/api")
 
@@ -578,6 +627,19 @@ def build_router(db, get_current_user, require_role, hash_password):
         return [c["id"] async for c in db.classes.find(q, {"id": 1})]
 
     # -------- ATTENDANCE --------
+    def _compute_fee_status(doc: dict) -> str:
+        amt = float(doc.get("amount") or 0)
+        disc = float(doc.get("discount") or 0) + float(doc.get("scholarship_amount") or 0)
+        net = max(0.0, amt - disc)
+        paid = float(doc.get("paid_amount") or 0)
+        if paid <= 0:
+            due = doc.get("due_date")
+            if due and due < datetime.now(timezone.utc).strftime("%Y-%m-%d"):
+                return "overdue"
+            return "unpaid"
+        if paid + 0.001 < net:
+            return "partial"
+        return "paid"
     @r.post("/attendance", status_code=201)
     async def mark_attendance(body: AttendanceMark, user=Depends(get_current_user)):
         if not await _teacher_owns_class(user, body.class_id):
@@ -602,6 +664,11 @@ def build_router(db, get_current_user, require_role, hash_password):
     @r.get("/attendance")
     async def get_attendance(class_id: Optional[str] = None,
                              student_id: Optional[str] = None,
+                             teacher_id: Optional[str] = None,
+                             course_id: Optional[str] = None,
+                             branch_id: Optional[str] = None,
+                             date_from: Optional[str] = None,
+                             date_to: Optional[str] = None,
                              user=Depends(get_current_user)):
         q: dict[str, Any] = {}
         role = user["role"]
@@ -616,12 +683,31 @@ def build_router(db, get_current_user, require_role, hash_password):
                 q["class_id"] = class_id
             else:
                 q["class_id"] = {"$in": visible}
-        else:
+        else:  # manager
+            # Manager may filter across everything
+            cls_q: dict[str, Any] = {"archived": {"$ne": True}}
+            if teacher_id:
+                cls_q["teacher_id"] = teacher_id
+            if course_id:
+                cls_q["course_id"] = course_id
+            if branch_id:
+                cls_q["branch_id"] = branch_id
             if class_id:
+                cls_q["id"] = class_id
+            if any(k in cls_q for k in ("teacher_id", "course_id", "branch_id", "id")):
+                ids = [c["id"] async for c in db.classes.find(cls_q, {"id": 1})]
+                q["class_id"] = {"$in": ids}
+            elif class_id:
                 q["class_id"] = class_id
             if student_id:
                 q["student_id"] = student_id
-        docs = await db.attendance.find(q).sort("date", -1).to_list(2000)
+        if date_from or date_to:
+            q["date"] = {}
+            if date_from:
+                q["date"]["$gte"] = date_from
+            if date_to:
+                q["date"]["$lte"] = date_to
+        docs = await db.attendance.find(q).sort("date", -1).to_list(5000)
         return [_s(d) for d in docs]
 
     # -------- HOMEWORK --------
@@ -779,6 +865,141 @@ def build_router(db, get_current_user, require_role, hash_password):
         )
         if res.matched_count == 0:
             raise HTTPException(404, "Not found or not pending")
+        return {"ok": True}
+
+    # -------- FEES --------
+    def _fee_to_client(doc: dict) -> dict:
+        d = _s(doc)
+        d["status"] = _compute_fee_status(doc)
+        d["net_amount"] = max(0.0, float(doc.get("amount") or 0)
+                              - float(doc.get("discount") or 0)
+                              - float(doc.get("scholarship_amount") or 0))
+        d["balance"] = max(0.0, d["net_amount"] - float(doc.get("paid_amount") or 0))
+        return d
+
+    @r.post("/fees", status_code=201)
+    async def create_fee(body: FeeIn, user=Depends(require_role("manager"))):
+        doc = {
+            "id": str(uuid.uuid4()), **body.model_dump(),
+            "paid_amount": 0, "payments": [], "late_fee": 0,
+            "created_at": now_iso(), "created_by": user["_id"],
+        }
+        await db.fees.insert_one(doc)
+        return _fee_to_client(doc)
+
+    @r.get("/fees")
+    async def list_fees(student_id: Optional[str] = None,
+                        course_id: Optional[str] = None,
+                        category: Optional[str] = None,
+                        status: Optional[str] = None,
+                        user=Depends(get_current_user)):
+        role = user["role"]
+        if role == "student":
+            q: dict[str, Any] = {"student_id": user["_id"]}
+        else:
+            q = {}
+            if student_id:
+                q["student_id"] = student_id
+            if course_id:
+                q["course_id"] = course_id
+            if category:
+                q["category"] = category
+        docs = await db.fees.find(q).sort("created_at", -1).to_list(5000)
+        results = [_fee_to_client(d) for d in docs]
+        if status:
+            results = [r for r in results if r["status"] == status]
+        return results
+
+    @r.patch("/fees/{fid}")
+    async def update_fee(fid: str, body: FeePatch,
+                        user=Depends(require_role("manager"))):
+        upd = {k: v for k, v in body.model_dump(exclude_unset=True).items()}
+        if not upd:
+            raise HTTPException(400, "No fields")
+        res = await db.fees.update_one({"id": fid}, {"$set": upd})
+        if res.matched_count == 0:
+            raise HTTPException(404, "Fee not found")
+        return _fee_to_client(await db.fees.find_one({"id": fid}))
+
+    @r.delete("/fees/{fid}")
+    async def delete_fee(fid: str, user=Depends(require_role("manager"))):
+        res = await db.fees.delete_one({"id": fid})
+        if res.deleted_count == 0:
+            raise HTTPException(404, "Fee not found")
+        return {"ok": True}
+
+    @r.post("/fees/{fid}/payments", status_code=201)
+    async def record_payment(fid: str, body: PaymentIn,
+                             user=Depends(require_role("manager"))):
+        fee = await db.fees.find_one({"id": fid})
+        if not fee:
+            raise HTTPException(404, "Fee not found")
+        if body.amount <= 0:
+            raise HTTPException(400, "Amount must be positive")
+        payment = {
+            "id": str(uuid.uuid4()),
+            "amount": body.amount,
+            "payment_method": body.payment_method or "cash",
+            "receipt_number": body.receipt_number or f"KS-{uuid.uuid4().hex[:8].upper()}",
+            "paid_date": body.paid_date or now_iso(),
+            "notes": body.notes,
+            "recorded_by": user["_id"],
+        }
+        new_paid = float(fee.get("paid_amount") or 0) + body.amount
+        await db.fees.update_one(
+            {"id": fid},
+            {"$set": {"paid_amount": new_paid, "last_payment_at": payment["paid_date"]},
+             "$push": {"payments": payment}},
+        )
+        return {"ok": True, "payment": payment, "paid_amount": new_paid}
+
+    # -------- CERTIFICATES --------
+    @r.post("/certificates", status_code=201)
+    async def create_certificate(body: CertificateIn,
+                                 user=Depends(require_role("manager"))):
+        # Ensure unique certificate_number
+        if await db.certificates.find_one({"certificate_number": body.certificate_number}):
+            raise HTTPException(400, "Certificate number already exists")
+        doc = {
+            "id": str(uuid.uuid4()), **body.model_dump(),
+            "issued_date": body.issued_date or now_iso(),
+            "issued_by": user["_id"], "created_at": now_iso(),
+        }
+        await db.certificates.insert_one(doc)
+        return _s(doc)
+
+    @r.get("/certificates")
+    async def list_certificates(student_id: Optional[str] = None,
+                                course_id: Optional[str] = None,
+                                user=Depends(get_current_user)):
+        role = user["role"]
+        if role == "student":
+            q: dict[str, Any] = {"student_id": user["_id"]}
+        else:
+            q = {}
+            if student_id:
+                q["student_id"] = student_id
+            if course_id:
+                q["course_id"] = course_id
+        docs = await db.certificates.find(q).sort("issued_date", -1).to_list(2000)
+        return [_s(d) for d in docs]
+
+    @r.patch("/certificates/{cid}")
+    async def update_certificate(cid: str, body: CertificatePatch,
+                                 user=Depends(require_role("manager"))):
+        upd = {k: v for k, v in body.model_dump(exclude_unset=True).items()}
+        if not upd:
+            raise HTTPException(400, "No fields")
+        res = await db.certificates.update_one({"id": cid}, {"$set": upd})
+        if res.matched_count == 0:
+            raise HTTPException(404, "Certificate not found")
+        return _s(await db.certificates.find_one({"id": cid}))
+
+    @r.delete("/certificates/{cid}")
+    async def delete_certificate(cid: str, user=Depends(require_role("manager"))):
+        res = await db.certificates.delete_one({"id": cid})
+        if res.deleted_count == 0:
+            raise HTTPException(404, "Certificate not found")
         return {"ok": True}
 
     # -------- SEED default branch + rooms --------

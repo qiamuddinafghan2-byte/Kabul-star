@@ -459,6 +459,7 @@ export function CoursesTab() {
 /* CLASSES tab moved to ./classesTab.jsx */
 export { ClassesTab } from "./classesTab";
 export { BranchesTab, RoomsTab } from "./branches";
+export { ManagerAttendanceTab, FeesTab, CertificatesTab } from "./finance";
 
 function _LegacyClassesTab_UNUSED() {
   const [list, setList] = useState([]);
